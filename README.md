@@ -62,3 +62,15 @@ Critério futuro: avaliar acerto de rota, suporte das afirmações, validade de 
 - **Portfólio Completo:** [https://beatrizorlandi.github.io](https://beatrizorlandi.github.io)
 - **Estudo de Caso no Site:** [https://beatrizorlandi.github.io/projetos/agentes-investigacao.html](https://beatrizorlandi.github.io/projetos/agentes-investigacao.html)
 - **Planejamento Técnico no Site:** [https://beatrizorlandi.github.io/documentacao/agentes-investigacao.html](https://beatrizorlandi.github.io/documentacao/agentes-investigacao.html)
+
+## Execução Validada no Databricks (05/11/2026)
+
+- **Agente no Databricks Model Serving:**
+  - Código: `portfolio_agent/agent.py` (`MLflow ResponsesAgent`) e `portfolio_agent/01_registrar_e_servir_agente.py`
+  - Modelo no Unity Catalog: `workspace.estudos_ai.beatriz_portfolio_agent` (alias `@prod`)
+  - Endpoint Model Serving: `beatriz-portfolio-agent` (`READY`)
+  - Aplicação Databricks App: `databricks_app/app.py` (`beatriz-portfolio-app`)
+- **Orquestração e Máquina de Estados Aurora:**
+  - Notebook executado: `02_orquestracao_agentes_aurora.py`
+  - Tabelas Delta: `workspace.estudos_ai.aurora_agent_execucoes` e `workspace.estudos_ai.aurora_agent_transicoes`
+  - Resultado: **16/16 cenários aprovados** (100% de acerto de rota e status, 0 violações de escopo, bloqueio determinístico de SQL injection e bibliotecas fora do `trusted_scope`).
