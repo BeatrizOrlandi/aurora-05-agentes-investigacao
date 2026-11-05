@@ -1,13 +1,13 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # Registrar e Fazer Deploy do Agente do Portfólio (Model Serving)
-# MAGIC Registra o `PortfolioAssistantAgent` (`ResponsesAgent`) no Unity Catalog (`workspace.estudos_ai.beatriz_portfolio_agent`), configura passthrough authentication para o endpoint LLM `databricks-meta-llama-3-3-70b-instruct` e cria/atualiza o endpoint `beatriz-portfolio-agent` no Databricks Model Serving.
+# MAGIC # Registrar, Avaliar com MLflow Tracing e Fazer Deploy do Agente BIA (Model Serving)
+# MAGIC Registra o `PortfolioAssistantAgent` (`ResponsesAgent` instrumentado com `@mlflow.trace`) no Unity Catalog (`workspace.estudos_ai.beatriz_portfolio_agent`), gera traces detalhados no experimento MLflow (`/Shared/portfolio-estudos/05_agentes/experimentos/portfolio_agent`), persiste histórico de traces em `workspace.estudos_ai.bia_agent_traces` e atualiza o endpoint `beatriz-portfolio-agent`.
 
 # COMMAND ----------
 import json
 import os
 import time
-from pathlib import Path
+from datetime import datetime, timezone
 import mlflow
 from mlflow.models.resources import DatabricksServingEndpoint
 from mlflow.tracking import MlflowClient
@@ -34,17 +34,34 @@ MODEL_NAME = "workspace.estudos_ai.beatriz_portfolio_agent"
 ENDPOINT_NAME = "beatriz-portfolio-agent"
 LLM_ENDPOINT = "databricks-meta-llama-3-3-70b-instruct"
 
+mlflow.set_tracking_uri("databricks")
 mlflow.set_registry_uri("databricks-uc")
-mlflow.set_experiment(EXPERIMENT_PATH)
+exp = mlflow.set_experiment(EXPERIMENT_PATH)
+exp_id = exp.experiment_id
+os.environ["MLFLOW_EXPERIMENT_ID"] = str(exp_id)
+
+try:
+    from mlflow.entities import MlflowExperimentLocation
+    mlflow.tracing.set_destination(MlflowExperimentLocation(experiment_id=str(exp_id)))
+except Exception:
+    pass
 
 resources = [DatabricksServingEndpoint(endpoint_name=LLM_ENDPOINT)]
 input_example = {
     "input": [
-        {"role": "user", "content": "Olá! Quem é a Beatriz Helena, quais projetos ela já validou no Databricks e como entro em contato?"}
+        {"role": "user", "content": "Olá BIA! Quem é a Beatriz Helena, qual é o projeto mais legal dela no Databricks e qual o WhatsApp dela?"}
     ]
 }
 
-with mlflow.start_run(run_name="register_portfolio_agent") as run:
+with mlflow.start_run(run_name="register_bia_agent_with_tracing") as run:
+    mlflow.log_params({
+        "agent_name": "BIA",
+        "llm_endpoint": LLM_ENDPOINT,
+        "uc_model_name": MODEL_NAME,
+        "serving_endpoint": ENDPOINT_NAME,
+        "mlflow_tracing_enabled": True,
+        "experiment_id": str(exp_id),
+    })
     info = mlflow.pyfunc.log_model(
         name="agent",
         python_model=AGENT_FILE,
@@ -63,11 +80,42 @@ versions = client.search_model_versions(f"name='{MODEL_NAME}'")
 latest_version = str(max(int(v.version) for v in versions))
 client.set_registered_model_alias(MODEL_NAME, "prod", latest_version)
 
-# Teste rápido do modelo carregado no próprio notebook antes do endpoint
+# Carregar o modelo instrumentado e executar bateria de perguntas para registrar Traces no MLflow Experiment
 loaded = mlflow.pyfunc.load_model(info.model_uri)
-test_pred = loaded.predict(input_example)
 
-# Criar ou atualizar o endpoint no Model Serving (com scale_to_zero_enabled=True)
+TRACE_PROMPTS = [
+    "Oi BIA! Tudo bem? Quem é você e quem é a Beatriz Helena?",
+    "Qual é o projeto mais legal da Beatriz no Databricks?",
+    "Você tem o WhatsApp e o e-mail da Beatriz para eu entrar em contato?",
+    "Como funciona a arquitetura do projeto 03 de RAG com Databricks Vector Search e Qwen3?",
+    "Por que devo contratar a Beatriz para o meu time de Engenharia de IA?",
+]
+
+trace_records = []
+with mlflow.start_run(run_name="bia_trace_evaluation_suite") as eval_run:
+    for idx, q in enumerate(TRACE_PROMPTS, start=1):
+        t0 = time.time()
+        pred = loaded.predict({"input": [{"role": "user", "content": q}]})
+        latency_ms = round((time.time() - t0) * 1000.0, 1)
+        reply_str = str(pred)
+        trace_records.append({
+            "trace_index": idx,
+            "experiment_id": str(exp_id),
+            "run_id": eval_run.info.run_id,
+            "model_version": latest_version,
+            "question": q,
+            "response_preview": reply_str[:600],
+            "latency_ms": float(latency_ms),
+            "logged_at_utc": datetime.now(timezone.utc).isoformat(),
+        })
+    mlflow.log_metrics({
+        "traced_queries_count": len(TRACE_PROMPTS),
+        "avg_latency_ms": round(sum(r["latency_ms"] for r in trace_records) / len(trace_records), 1),
+    })
+
+spark.createDataFrame(trace_records).write.mode("overwrite").saveAsTable("workspace.estudos_ai.bia_agent_traces")
+
+# Atualizar o endpoint no Model Serving incluindo variáveis de ambiente de Tracing
 served_entity_name = f"beatriz_portfolio_agent-{latest_version}"
 served_entities = [
     ServedEntityInput(
@@ -76,6 +124,10 @@ served_entities = [
         entity_version=latest_version,
         workload_size="Small",
         scale_to_zero_enabled=True,
+        environment_vars={
+            "MLFLOW_EXPERIMENT_ID": str(exp_id),
+            "ENABLE_MLFLOW_TRACING": "true",
+        },
     )
 ]
 traffic_config = TrafficConfig(
@@ -105,10 +157,11 @@ result = {
     "status": "success",
     "model_name": MODEL_NAME,
     "model_version": latest_version,
-    "run_id": run.info.run_id,
+    "experiment_id": str(exp_id),
+    "experiment_path": EXPERIMENT_PATH,
+    "traces_logged": len(trace_records),
     "endpoint_name": ENDPOINT_NAME,
     "endpoint_action": action,
-    "sample_prediction": str(test_pred)[:500],
 }
 print(json.dumps(result, ensure_ascii=False))
 dbutils.notebook.exit(json.dumps(result, ensure_ascii=False))

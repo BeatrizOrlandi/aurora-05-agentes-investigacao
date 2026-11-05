@@ -1,5 +1,6 @@
-"""Databricks App — Portfólio e Assistente de IA BIA (Beatriz Helena)."""
+"""Databricks App — Portfólio e Assistente de IA BIA (Beatriz Helena) com MLflow Tracing."""
 import os
+import time
 from pathlib import Path
 from typing import List
 from fastapi import FastAPI
@@ -19,6 +20,17 @@ app.add_middleware(
 
 SERVING_ENDPOINT = os.getenv("SERVING_ENDPOINT_NAME", "beatriz-portfolio-agent")
 FALLBACK_LLM = os.getenv("FALLBACK_LLM_ENDPOINT", "databricks-meta-llama-3-3-70b-instruct")
+EXPERIMENT_ID = os.getenv("MLFLOW_EXPERIMENT_ID", "2404553135715664")
+
+try:
+    import mlflow
+    from mlflow.entities import MlflowExperimentLocation
+    mlflow.set_tracking_uri("databricks")
+    mlflow.set_experiment(experiment_id=EXPERIMENT_ID)
+    mlflow.tracing.set_destination(MlflowExperimentLocation(experiment_id=EXPERIMENT_ID))
+    TRACING_READY = True
+except Exception:
+    TRACING_READY = False
 
 SYSTEM_PROMPT = """Você é a **BIA** (Beatriz Intelligence Assistant), a agente oficial de IA do portfólio da **Beatriz Helena** (Beatriz Orlandi), Engenheira de IA!
 
@@ -75,24 +87,23 @@ def health():
         "agent_name": "BIA",
         "serving_endpoint": SERVING_ENDPOINT,
         "fallback_llm": FALLBACK_LLM,
+        "mlflow_experiment_id": EXPERIMENT_ID,
+        "tracing_ready": TRACING_READY,
     }
 
 
-@app.post("/api/chat")
-def chat(req: ChatRequest):
+def _execute_bia_chat(input_msgs: list[dict]) -> dict:
     from databricks.sdk import WorkspaceClient
     from databricks.sdk.service.serving import ChatMessage, ChatMessageRole
 
     w = WorkspaceClient()
-    input_msgs = [{"role": m.role, "content": m.content} for m in req.messages]
+    t0 = time.time()
 
-    # 1. Usar diretamente o Foundation Model com o prompt atualizado da BIA para latência mínima,
-    #    ou consultar o endpoint beatriz-portfolio-agent
     try:
         sdk_msgs = [ChatMessage(role=ChatMessageRole.SYSTEM, content=SYSTEM_PROMPT)]
-        for m in req.messages:
-            r = ChatMessageRole.ASSISTANT if m.role == "assistant" else ChatMessageRole.USER
-            sdk_msgs.append(ChatMessage(role=r, content=m.content))
+        for m in input_msgs:
+            r = ChatMessageRole.ASSISTANT if m["role"] == "assistant" else ChatMessageRole.USER
+            sdk_msgs.append(ChatMessage(role=r, content=m["content"]))
         resp = w.serving_endpoints.query(
             name=FALLBACK_LLM,
             messages=sdk_msgs,
@@ -103,6 +114,7 @@ def chat(req: ChatRequest):
             "reply": resp.choices[0].message.content,
             "source": FALLBACK_LLM,
             "agent": "BIA",
+            "latency_ms": round((time.time() - t0) * 1000.0, 1),
         }
     except Exception:
         pass
@@ -124,7 +136,12 @@ def chat(req: ChatRequest):
                             if isinstance(c, dict) and c.get("text"):
                                 texts.append(c["text"])
             if texts:
-                return {"reply": "\n".join(texts), "source": SERVING_ENDPOINT, "agent": "BIA"}
+                return {
+                    "reply": "\n".join(texts),
+                    "source": SERVING_ENDPOINT,
+                    "agent": "BIA",
+                    "latency_ms": round((time.time() - t0) * 1000.0, 1),
+                }
     except Exception as exc:
         return {
             "reply": (
@@ -135,6 +152,21 @@ def chat(req: ChatRequest):
             "source": "fallback_static",
             "error": str(exc),
         }
+
+
+@app.post("/api/chat")
+def chat(req: ChatRequest):
+    input_msgs = [{"role": m.role, "content": m.content} for m in req.messages]
+    if TRACING_READY:
+        try:
+            with mlflow.start_span(name="BIA_App_Chat_Request", span_type="AGENT") as span:
+                span.set_inputs({"messages": input_msgs})
+                result = _execute_bia_chat(input_msgs)
+                span.set_outputs(result)
+                return result
+        except Exception:
+            pass
+    return _execute_bia_chat(input_msgs)
 
 
 STATIC_DIR = Path(__file__).parent / "static"

@@ -11,3 +11,7 @@ env:
     value: "beatriz-portfolio-agent"
   - name: FALLBACK_LLM_ENDPOINT
     value: "databricks-meta-llama-3-3-70b-instruct"
+  - name: MLFLOW_EXPERIMENT_ID
+    value: "2404553135715664"
+  - name: ENABLE_MLFLOW_TRACING
+    value: "true"

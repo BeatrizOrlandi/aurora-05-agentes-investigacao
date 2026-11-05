@@ -1,12 +1,22 @@
-"""Agente de IA do Portfólio de Beatriz Helena (BIA) — MLflow ResponsesAgent."""
+"""Agente de IA do Portfólio de Beatriz Helena (BIA) — MLflow ResponsesAgent com MLflow Tracing."""
+import os
+import time
 from typing import Generator
 import mlflow
+from mlflow.entities import SpanType
 from mlflow.pyfunc import ResponsesAgent
 from mlflow.types.responses import (
     ResponsesAgentRequest,
     ResponsesAgentResponse,
     ResponsesAgentStreamEvent,
 )
+
+EXPERIMENT_ID_DEFAULT = os.getenv("MLFLOW_EXPERIMENT_ID", "2404553135715664")
+try:
+    from mlflow.entities import MlflowExperimentLocation
+    mlflow.tracing.set_destination(MlflowExperimentLocation(experiment_id=EXPERIMENT_ID_DEFAULT))
+except Exception:
+    pass
 
 SYSTEM_PROMPT = """Você é a **BIA** (Beatriz Intelligence Assistant), a agente oficial de IA do portfólio da **Beatriz Helena** (Beatriz Orlandi), Engenheira de IA!
 
@@ -79,55 +89,77 @@ Se perguntarem "qual o projeto mais legal?" ou pedirem recomendações, destaque
 
 
 class PortfolioAssistantAgent(ResponsesAgent):
-    """Agente BIA hospedado no Databricks Model Serving para o portfólio de Beatriz Helena."""
+    """Agente BIA hospedado no Databricks Model Serving com instrumentação MLflow Tracing."""
 
     def __init__(self, llm_endpoint: str = "databricks-meta-llama-3-3-70b-instruct"):
         self.llm_endpoint = llm_endpoint
 
+    @mlflow.trace(name="BIA_Portfolio_Agent", span_type=SpanType.AGENT)
     def _call_llm(self, request: ResponsesAgentRequest) -> str:
         from databricks.sdk import WorkspaceClient
         from databricks.sdk.service.serving import ChatMessage, ChatMessageRole
 
         w = WorkspaceClient()
-        messages = [ChatMessage(role=ChatMessageRole.SYSTEM, content=SYSTEM_PROMPT)]
+        with mlflow.start_span(name="prepare_context_and_messages", span_type=SpanType.CHAIN) as prep_span:
+            messages = [ChatMessage(role=ChatMessageRole.SYSTEM, content=SYSTEM_PROMPT)]
+            user_turns = []
+            for item in request.input:
+                role_str = getattr(item, "role", "user") or "user"
+                content_val = getattr(item, "content", "")
+                if isinstance(content_val, list):
+                    text_parts = []
+                    for part in content_val:
+                        if isinstance(part, dict):
+                            text_parts.append(str(part.get("text", "")))
+                        elif hasattr(part, "text"):
+                            text_parts.append(str(part.text))
+                        else:
+                            text_parts.append(str(part))
+                    content_str = "\n".join(p for p in text_parts if p)
+                else:
+                    content_str = str(content_val)
 
-        for item in request.input:
-            role_str = getattr(item, "role", "user") or "user"
-            content_val = getattr(item, "content", "")
-            if isinstance(content_val, list):
-                text_parts = []
-                for part in content_val:
-                    if isinstance(part, dict):
-                        text_parts.append(str(part.get("text", "")))
-                    elif hasattr(part, "text"):
-                        text_parts.append(str(part.text))
-                    else:
-                        text_parts.append(str(part))
-                content_str = "\n".join(p for p in text_parts if p)
-            else:
-                content_str = str(content_val)
+                role_enum = (
+                    ChatMessageRole.ASSISTANT
+                    if role_str == "assistant"
+                    else ChatMessageRole.USER
+                )
+                messages.append(ChatMessage(role=role_enum, content=content_str))
+                user_turns.append({"role": role_str, "content": content_str})
 
-            role_enum = (
-                ChatMessageRole.ASSISTANT
-                if role_str == "assistant"
-                else ChatMessageRole.USER
+            prep_span.set_inputs({"conversation_history": user_turns})
+            prep_span.set_outputs({"total_messages_with_system": len(messages), "agent_persona": "BIA"})
+
+        with mlflow.start_span(name="Llama_3_3_70B_Generation", span_type=SpanType.CHAT_MODEL) as llm_span:
+            t0 = time.time()
+            llm_span.set_inputs({
+                "endpoint": self.llm_endpoint,
+                "user_messages": user_turns,
+                "temperature": 0.4,
+                "max_tokens": 700,
+            })
+            resp = w.serving_endpoints.query(
+                name=self.llm_endpoint,
+                messages=messages,
+                max_tokens=700,
+                temperature=0.4,
             )
-            messages.append(ChatMessage(role=role_enum, content=content_str))
+            reply_text = resp.choices[0].message.content
+            latency_ms = round((time.time() - t0) * 1000.0, 1)
+            llm_span.set_attribute("latency_ms", latency_ms)
+            llm_span.set_attribute("model_endpoint", self.llm_endpoint)
+            llm_span.set_outputs({"reply": reply_text, "latency_ms": latency_ms})
 
-        resp = w.serving_endpoints.query(
-            name=self.llm_endpoint,
-            messages=messages,
-            max_tokens=700,
-            temperature=0.4,
-        )
-        return resp.choices[0].message.content
+        return reply_text
 
+    @mlflow.trace(name="BIA_predict", span_type=SpanType.AGENT)
     def predict(self, request: ResponsesAgentRequest) -> ResponsesAgentResponse:
         reply_text = self._call_llm(request)
         return ResponsesAgentResponse(
             output=[self.create_text_output_item(text=reply_text, id="msg_1")]
         )
 
+    @mlflow.trace(name="BIA_predict_stream", span_type=SpanType.AGENT)
     def predict_stream(
         self, request: ResponsesAgentRequest
     ) -> Generator[ResponsesAgentStreamEvent, None, None]:
