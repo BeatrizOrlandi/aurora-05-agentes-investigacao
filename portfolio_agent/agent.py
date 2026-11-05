@@ -136,7 +136,8 @@ class PortfolioAssistantAgent(ResponsesAgent):
             **self.create_text_delta(delta=reply_text, item_id="msg_1")
         )
         yield ResponsesAgentStreamEvent(
-            **self.create_text_output_item(text=reply_text, id="msg_1")
+            type="response.output_item.done",
+            item=self.create_text_output_item(text=reply_text, id="msg_1"),
         )
 
 
