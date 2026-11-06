@@ -1,0 +1,539 @@
+{
+  "datasets": [
+    {
+      "name": "ds_kpis_exec",
+      "displayName": "ds_kpis_exec",
+      "queryLines": [
+        "SELECT\n",
+        "    5000 AS total_eventos_processados,\n",
+        "    2500 AS emprestimos_validos_silver,\n",
+        "    24 AS assercoes_gate_aprovadas,\n",
+        "    0.9333 AS rag_top1_accuracy,\n",
+        "    1.0000 AS llm_structured_json_rate,\n",
+        "    1.0000 AS agente_rotas_accuracy,\n",
+        "    10.58 AS ml_demanda_mae,\n",
+        "    0.9231 AS bem_f1_score,\n",
+        "    18.0 AS horas_economizadas_mes\n"
+      ]
+    },
+    {
+      "name": "ds_llm_ablation",
+      "displayName": "ds_llm_ablation",
+      "queryLines": [
+        "SELECT\n",
+        "    model_label,\n",
+        "    prompt_variant,\n",
+        "    COUNT(*) AS total_casos,\n",
+        "    ROUND(AVG(CASE WHEN valid_json THEN 100.0 ELSE 0.0 END), 1) AS json_valido_pct,\n",
+        "    ROUND(AVG(CASE WHEN category_correct THEN 100.0 ELSE 0.0 END), 1) AS acuracia_categoria_pct,\n",
+        "    ROUND(AVG(CASE WHEN priority_correct THEN 100.0 ELSE 0.0 END), 1) AS acuracia_prioridade_pct,\n",
+        "    ROUND(AVG(latency_ms), 0) AS latencia_media_ms\n",
+        "FROM workspace.estudos_ai.aurora_llm_resultados\n",
+        "GROUP BY model_label, prompt_variant\n",
+        "ORDER BY model_label, prompt_variant\n"
+      ]
+    },
+    {
+      "name": "ds_agent_execucoes",
+      "displayName": "ds_agent_execucoes",
+      "queryLines": [
+        "SELECT\n",
+        "    scenario_id,\n",
+        "    category,\n",
+        "    final_status,\n",
+        "    expected_status,\n",
+        "    steps_taken,\n",
+        "    tool_calls,\n",
+        "    ROUND(latency_ms, 1) AS latency_ms,\n",
+        "    CASE WHEN status_correct AND guardrail_respected THEN 'OK' ELSE 'FALHA' END AS conformidade\n",
+        "FROM workspace.estudos_ai.aurora_agent_execucoes\n",
+        "ORDER BY scenario_id\n"
+      ]
+    },
+    {
+      "name": "ds_bia_traces",
+      "displayName": "ds_bia_traces",
+      "queryLines": [
+        "SELECT\n",
+        "    trace_id,\n",
+        "    pergunta,\n",
+        "    LEFT(resposta, 140) AS resumo_resposta,\n",
+        "    ROUND(latency_ms, 0) AS latency_ms,\n",
+        "    endpoint_model,\n",
+        "    logged_at\n",
+        "FROM workspace.estudos_ai.bia_agent_traces\n",
+        "ORDER BY logged_at DESC\n"
+      ]
+    },
+    {
+      "name": "ds_bikes_predicoes",
+      "displayName": "ds_bikes_predicoes",
+      "queryLines": [
+        "SELECT\n",
+        "    CAST(target_hour AS TIMESTAMP) AS data_hora,\n",
+        "    actual_rentals AS demanda_real,\n",
+        "    ROUND(pred_hist_gbm, 1) AS previsao_hist_gbm,\n",
+        "    ROUND(pred_ridge, 1) AS previsao_ridge,\n",
+        "    ROUND(pred_baseline_lag24, 1) AS baseline_lag24h\n",
+        "FROM workspace.estudos_gold.bikes_predicoes\n",
+        "ORDER BY target_hour ASC\n",
+        "LIMIT 168\n"
+      ]
+    }
+  ],
+  "pages": [
+    {
+      "name": "visao_executiva_ia",
+      "displayName": "Visão Executiva — IA, Prompts, Automação & Qualidade",
+      "pageType": "PAGE_TYPE_CANVAS",
+      "layout": [
+        {
+          "widget": {
+            "name": "header_banner",
+            "multilineTextboxSpec": {
+              "lines": [
+                "## Aurora & BIA — Painel Executivo de Engenharia de IA em Produção",
+                "Monitoramento unificado de **Prompts Estruturados (LLMs)**, **Agentes em Produção (BIA Model Serving + Máquina de Estados)**, **Automação Operacional** e **Qualidade Medallion** no Databricks."
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 6,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi_json_rate",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_kpis_exec",
+                  "fields": [
+                    {
+                      "name": "llm_structured_json_rate",
+                      "expression": "`llm_structured_json_rate`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "llm_structured_json_rate",
+                  "displayName": "Conformidade JSON (Prompt Estruturado)"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Prompts Estruturados (JSON Estrito)"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 2,
+            "width": 2,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi_agent_routes",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_kpis_exec",
+                  "fields": [
+                    {
+                      "name": "agente_rotas_accuracy",
+                      "expression": "`agente_rotas_accuracy`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "agente_rotas_accuracy",
+                  "displayName": "Sucesso de Rotas & Guardrails (16/16)"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Agente Operacional & Guardrails"
+              }
+            }
+          },
+          "position": {
+            "x": 2,
+            "y": 2,
+            "width": 2,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi_horas_economizadas",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_kpis_exec",
+                  "fields": [
+                    {
+                      "name": "horas_economizadas_mes",
+                      "expression": "`horas_economizadas_mes`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "horas_economizadas_mes",
+                  "displayName": "Horas Reais Economizadas / Mês"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Economia Mensal (Automação Boletins & Gate)"
+              }
+            }
+          },
+          "position": {
+            "x": 4,
+            "y": 2,
+            "width": 2,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "chart_llm_ablation",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_llm_ablation",
+                  "fields": [
+                    {
+                      "name": "prompt_variant",
+                      "expression": "`prompt_variant`"
+                    },
+                    {
+                      "name": "model_label",
+                      "expression": "`model_label`"
+                    },
+                    {
+                      "name": "json_valido_pct",
+                      "expression": "AVG(`json_valido_pct`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "prompt_variant",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Variante de Prompt"
+                },
+                "y": {
+                  "fieldName": "json_valido_pct",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "% JSON Estrito Válido"
+                },
+                "color": {
+                  "fieldName": "model_label",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Modelo Foundation"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Ablação de Prompts (Direct vs. Structured JSON Schema)"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 5,
+            "width": 3,
+            "height": 5
+          }
+        },
+        {
+          "widget": {
+            "name": "chart_bikes_forecast",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_bikes_predicoes",
+                  "fields": [
+                    {
+                      "name": "data_hora",
+                      "expression": "`data_hora`"
+                    },
+                    {
+                      "name": "demanda_real",
+                      "expression": "AVG(`demanda_real`)"
+                    },
+                    {
+                      "name": "previsao_hist_gbm",
+                      "expression": "AVG(`previsao_hist_gbm`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "line",
+              "encodings": {
+                "x": {
+                  "fieldName": "data_hora",
+                  "scale": {
+                    "type": "temporal"
+                  },
+                  "displayName": "Horário"
+                },
+                "y": {
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "fields": [
+                    {
+                      "fieldName": "demanda_real",
+                      "displayName": "Demanda Real"
+                    },
+                    {
+                      "fieldName": "previsao_hist_gbm",
+                      "displayName": "Previsão HistGradientBoosting (MAE 10.58)"
+                    }
+                  ]
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Previsão Horária de Demanda em Produção (HistGradientBoosting vs Real)"
+              }
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 5,
+            "width": 3,
+            "height": 5
+          }
+        },
+        {
+          "widget": {
+            "name": "table_bia_traces",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_bia_traces",
+                  "fields": [
+                    {
+                      "name": "trace_id",
+                      "expression": "`trace_id`"
+                    },
+                    {
+                      "name": "pergunta",
+                      "expression": "`pergunta`"
+                    },
+                    {
+                      "name": "resumo_resposta",
+                      "expression": "`resumo_resposta`"
+                    },
+                    {
+                      "name": "latency_ms",
+                      "expression": "`latency_ms`"
+                    },
+                    {
+                      "name": "endpoint_model",
+                      "expression": "`endpoint_model`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "trace_id",
+                    "displayName": "MLflow Trace ID",
+                    "type": "string",
+                    "visible": true
+                  },
+                  {
+                    "fieldName": "pergunta",
+                    "displayName": "Pergunta ao Agente BIA",
+                    "type": "string",
+                    "visible": true
+                  },
+                  {
+                    "fieldName": "resumo_resposta",
+                    "displayName": "Resposta Gerada",
+                    "type": "string",
+                    "visible": true
+                  },
+                  {
+                    "fieldName": "latency_ms",
+                    "displayName": "Latência (ms)",
+                    "type": "number",
+                    "visible": true
+                  },
+                  {
+                    "fieldName": "endpoint_model",
+                    "displayName": "Foundation Model",
+                    "type": "string",
+                    "visible": true
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Traces Auditados do Agente BIA (Model Serving + MLflow Tracing)"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 10,
+            "width": 6,
+            "height": 5
+          }
+        },
+        {
+          "widget": {
+            "name": "table_agent_scenarios",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_agent_execucoes",
+                  "fields": [
+                    {
+                      "name": "scenario_id",
+                      "expression": "`scenario_id`"
+                    },
+                    {
+                      "name": "category",
+                      "expression": "`category`"
+                    },
+                    {
+                      "name": "final_status",
+                      "expression": "`final_status`"
+                    },
+                    {
+                      "name": "steps_taken",
+                      "expression": "`steps_taken`"
+                    },
+                    {
+                      "name": "tool_calls",
+                      "expression": "`tool_calls`"
+                    },
+                    {
+                      "name": "conformidade",
+                      "expression": "`conformidade`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "scenario_id",
+                    "displayName": "Cenário",
+                    "type": "string",
+                    "visible": true
+                  },
+                  {
+                    "fieldName": "category",
+                    "displayName": "Categoria",
+                    "type": "string",
+                    "visible": true
+                  },
+                  {
+                    "fieldName": "final_status",
+                    "displayName": "Decisão Final",
+                    "type": "string",
+                    "visible": true
+                  },
+                  {
+                    "fieldName": "steps_taken",
+                    "displayName": "Passos",
+                    "type": "number",
+                    "visible": true
+                  },
+                  {
+                    "fieldName": "tool_calls",
+                    "displayName": "Tool Calls",
+                    "type": "number",
+                    "visible": true
+                  },
+                  {
+                    "fieldName": "conformidade",
+                    "displayName": "Conformidade",
+                    "type": "string",
+                    "visible": true
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Auditoria dos 16 Cenários do Agente de Investigação Operacional"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 15,
+            "width": 6,
+            "height": 5
+          }
+        }
+      ]
+    }
+  ]
+}
